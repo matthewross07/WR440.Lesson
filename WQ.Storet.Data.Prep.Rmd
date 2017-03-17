@@ -1,0 +1,166 @@
+---
+title: "Water Quality and Spatial Data Preparation"
+author: "Matthew Ross"
+date: "3/15/2017"
+output: html_document
+---
+
+
+In this lesson, we will look at how land use change affects downstream water quality. 
+
+#Data Prep
+```{r,echo=F,include=F}
+#Read in key libraries 
+library(rgdal) #Geospatial library for open source spatial analyses
+library(rgeos) #Database of projeciton transformations
+library(raster) #Library for importing and analyzing rasters
+library(tidyverse) #Metalibrary that pulls in key data manipulation libraries
+library(reshape2) #Data manipulation library
+library(leaflet) #Data visualization of spatial data
+library(lubridate) #Easy way to assign time stamps
+library(dataRetrieval) #Package that direclty taps into the USGS database
+```
+
+##Read in raw data 
+
+Data comes from several sources
+
+* Q data comes from USGS for stations: 
+    + 09046600, Blue River above Dillon Reservoir
+    + 09047500, Snake River near Montezuma
+* Water Quality is downloaded from STORET  [database](https://ofmpub.epa.gov/apex/STORETSummary/f?p=WATERSHEDUI:1:::::P1_ORG_CHAR,P1_HUC:1,14010002) from several sources:
+    + RiverWatch Network
+    + Colorado Department of Publich Health and Environment
+* Spatial data comes from [NHD Plus](http://www.horizon-systems.com/nhdplus/)
+
+
+```{r,echo=F,eval=F}
+#Read in watershed boundary dataset and subset to blue river watershed station data
+catch <- readOGR('data/NHDPlusCO-1/NHDPlus14/WBDSnapshot/WBD','WBD_Subwatershed') %>%
+  .[.$HUC_8 == 14010002,]
+
+
+#Read in and subset STORET data  from the 3 different sources
+riverwatch <- read.delim('data/riverwatch/Data_rvm_20170315_122429_RegResults.txt',sep='\t',stringsAsFactors = F)  
+
+cdphe.new <- read.delim('data/cdphe.new/Data_vrm_20170315_122407_RegResults.txt',sep='\t',stringsAsFactors = F) 
+#  filter(Station.ID %in% c('12336','12337'))
+
+cdphe.old <- read.delim('data/cdphe.old/chem.txt',sep='\t',stringsAsFactors = F) 
+#  filter(Station.ID %in% c('12336','12337'))
+
+#Bind all 3 of those watershed data sources
+dat.full <- rbind(cdphe.new,cdphe.old,riverwatch)
+
+#Identify Snake River and Blue River monitoring stations
+keepers <- c('000115','000140','51')
+stat.names <- c('Blue River', 'Snake River','Snake River')
+
+#Cast and filter data by number of observations to > 100
+dat.cast <- dat.full %>%
+  group_by(Station.ID, Station.Longitude,Station.Latitude) %>%
+  summarise(unq = length((unique(Activity.Start)))) %>%
+  filter(unq>100) %>% 
+  arrange(desc(unq)) %>%
+  filter(Station.ID %in% keepers)
+
+
+#Convert cast data into a spatial data frame
+sp.dat <- dat.cast %>% as.data.frame(.)
+station.sp <-  SpatialPointsDataFrame(coords = sp.dat[,c('Station.Longitude','Station.Latitude')], data = sp.dat, proj4string = CRS("+proj=longlat +datum=WGS84 +ellps=WGS84 +towgs84=0,0,0")) %>%
+  spTransform(.,CRS=projection(catch))
+
+
+#Subset spatial data to only the huc10 watersheds of interest
+csub <- catch[catch$HU_10_NAME %in% c('Snake River','Upper Blue River'),]
+
+
+
+#Subset full chemistry dataset to only Upper Blue River and Snake River
+chem.dat <- dat.full %>% 
+  filter(Station.ID%in%keepers) %>%
+  mutate(Site=ifelse(Station.ID==keepers[1],'Upper Blue River','Snake River'))
+
+#Read in Q data. 
+q.dat <- readNWISdata(service='dv',sites=c('09046600','09047500'),
+                        parameterCd='00060',
+                        startDate='1970-05-01',endDate='2016-10-10')
+
+#Add in sensible site names
+q.dat$Site = ifelse(q.dat$site_no=='09046600','Upper Blue River','Snake River')
+
+
+#Save full unmerged datasets
+save(q.dat,chem.dat,csub,file='data/UnmergedDat.RData')
+```
+
+
+
+##Manipulate and reshape data to extract yearly means of concentration data for key constituents. 
+```{r, echo=F}
+
+load('UnmergedDat.RData')
+
+#List of analytes of interest
+key.params <- c('Aluminum','Cadmium','Copper','Calcium','Inorganic nitrogen (nitrate and nitrite) as N','Phosphate-phosphorus as P',
+                'Iron','Lead','Manganese','Magnesium','pH','Selenium','Sodium','Zinc','Specific conductance','Sulfur, sulfate (SO4) as SO4')
+
+
+#Subset data by a few key characteristics and convert all data to mg/l 
+#Note that pH has no units and SC is in uS/cm
+sub.full <- chem.dat %>%
+  filter(Characteristic.Name %in% key.params) %>%
+  mutate(Units=ifelse(grepl('mg/l',Units),'mg/l',Units)) %>%
+  mutate(Units=ifelse(grepl('ug/l',Units),'ug/l',Units)) %>%
+  mutate(Result.Value.as.Number=ifelse(Units=='ug/l',Result.Value.as.Number/1000,Result.Value.as.Number)) %>%
+  mutate(Units=gsub('ug/l','mg/l',Units)) %>%
+  mutate(Units=ifelse(grepl('None',Units),'None',Units)) %>% 
+  mutate(Analyte = Characteristic.Name) %>%
+  mutate(date=ymd_hms(Activity.Start)) %>%
+  filter(date> ymd_hms('1970-01-01 00:00:00')) %>%
+  mutate(dateTime=as.Date(date))
+
+
+#Reshape data to make it easier for analysis
+chem.cast <- dcast(sub.full,dateTime+Site ~ Analyte, value.var='Result.Value.as.Number',mean)
+#Melt data back into long format
+chem.melt <- melt(chem.cast,id.vars=c('dateTime','Site'),measure.vars=key.params) %>% filter(!is.na(value))
+
+#Join chem data to full q datasets
+#First have to convert posix to date object
+q.dat$dateTime <- as.Date(q.dat$dateTime)
+q.chem <- left_join(q.dat,chem.melt, by=c('Site','dateTime'))
+
+
+#Save this q.chem dataset with spatial data for shiny app
+csub$color=c('blue')
+csub$color[csub$HU_10_NAME == 'Snake River'] <- 'red'
+
+#Name discharge column by untis (cubic feet per second)
+names(q.chem)[4] <- 'cfs'
+#Convert to lps and m3s
+q.chem$Lps <- q.chem$cfs*28.3168
+q.chem$m3s <- q.chem$Lps/1000
+q.chem$variable <- as.character(q.chem$variable)
+#Cast by site
+q.cast <- dcast(q.chem,dateTime~Site,value.var='m3s',mean)
+#Convert to time series object
+q.xts <- xts(q.cast[,-1],order.by=q.cast$dateTime)
+
+
+save(q.chem,q.cast,csub,station.sp,file='data/ShinyFullDataset.RData')
+
+```
+
+#Data Visualization
+SHINY APP
+
+#Landuse change
+12sV8yVPaWm9BipuXrikKNweB297mi4SQAPrCUxms
+
+[Climate](http://clim-engine.appspot.com/climateEngineExpert?toolAction=getMap&productType=RS&product=L_SR&variable=NDVI&statistic=Mean&calculation=anompercentchange&units=metric&varUnits=%&dateStart=2016-06-16&dateEnd=2016-09-16&yearStart=1982&yearEnd=1990&yearStartClim=1984&yearEndClim=1990&opacity=0.7&mapCenterLongLat=-105.8968,39.5483&mapzoom=13&timeperiod=custom&minColorbar=-30&maxColorbar=30&colorbarmap=RdYlGn&colorbarsize=8&colorbarType=continuous&layer=custommaplayer&palette=d73027,f46d43,fdae61,fee08b,d9ef8b,a6d96a,66bd63,1a9850&basemap=hybrid)
+```{r}
+
+```
+
+
