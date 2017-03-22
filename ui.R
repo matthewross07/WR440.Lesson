@@ -11,7 +11,8 @@ library(shiny)
 library(leaflet)
 library(dygraphs)
 vars <-
-  c(
+  sort(c(
+    'Chloride',
     "Cadmium",
     "Calcium",
     "Iron",
@@ -28,7 +29,7 @@ vars <-
     "Phosphate-phosphorus as P",
     "Inorganic nitrogen (nitrate and nitrite) as N",
     "Aluminum"
-  )               
+  ))               
 
 
 # Define UI for application that draws a histogram
@@ -38,21 +39,35 @@ shinyUI(fluidPage(sidebarLayout(
       Snake River Watershed (near Keystone Ski Area, in red) and Upper Blue River Watershed (near Breckenridge, in blue). 
       We will look at a 50-year record of concentration of key nutrients, pollutants, and discharge,
       to gain a better understanding of the factors (land use, discharge, pH)
-      that influence water quality in high mountain watersheds. Markers on map show location of WQ monitoring sites'
+      that influence water quality in high mountain watersheds. Markers on map show location of WQ monitoring sites.
+      Code, a lesson summary, and data for this web application can be found at my',
+      a('Github site',href='https://github.com/matthewross07/WR440.Lesson')
     ),
     leafletOutput('map',height=350)
   ),
     mainPanel(
       tabsetPanel(
         tabPanel('WQ change over time',
+                 fluidRow(column(4,
       selectInput('analyte',label='Select a water quality analyte',
-                  choices=vars),
-      br(),
-      h3('Daily Discharge'),
-      dygraphOutput('q',height='225px'),
-      h3('Analyte Concentration'),
-      dygraphOutput('time.chem',height='225px')
-                  ),
+                  choices=vars)),
+      column(4,
+             p('Look up drinking water thresholds',
+               
+               a('Primary',href='https://www.epa.gov/ground-water-and-drinking-water/national-primary-drinking-water-regulations'),
+               'or',
+               a('Secondary',href='https://www.epa.gov/dwstandardsregulations/secondary-drinking-water-standards-guidance-nuisance-chemicals')
+             )
+      ),
+      column(4,
+             numericInput('thresh',label='Enter a Regulation Threshold',value=NA))
+      ),
+      plotOutput('diff',height='160px'),
+      h4('Analyte Concentration'),
+      dygraphOutput('time.chem',height='160px'),
+      h4('Daily Mean Discharge'),
+      dygraphOutput('q',height='160px')
+      ),
     tabPanel('WQ change with flow and season',
              fluidRow(column(
                4,
@@ -66,9 +81,9 @@ shinyUI(fluidPage(sidebarLayout(
                                 choices=c('all','summer','winter')))),
              br(),
              h3('Daily Discharge'),
-             dygraphOutput('q2', height='225px'),
+             dygraphOutput('q2', height='200px'),
              h3('QC plots'),
-             plotOutput('chemostasis',height='350px')
+             plotOutput('chemostasis',height='200px')
              )
     )
 ))))

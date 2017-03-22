@@ -9,12 +9,18 @@
 
 library(shiny)
 library(tidyverse)
+library(xts)
 library(dygraphs)
 library(reshape2)
 library(leaflet)
-library(xts)
 library(broom)
+library(lubridate)
+library(gridExtra)
+library(grid)
+
 load('data/ShinyFullDataset.RData')
+
+
 
 matt_theme <- theme_set(theme_bw())
 matt_theme<- theme_update(axis.line = element_line(colour = "black"),
@@ -26,18 +32,20 @@ matt_theme<- theme_update(axis.line = element_line(colour = "black"),
 )
 
 
-
 # Define server logic required to draw a histogram
 shinyServer(function(input, output) {
   
   output$map <- renderLeaflet({
     leaflet() %>%
-      addPolygons(data=csub,color=csub$color,popup=paste((csub$HU_10_NAME)),group='Catchments') %>%
+      addPolygons(data=csub,color=csub$color,popup=paste((csub$HU_12_NAME)),group='Catchments') %>%
       addMarkers(data=station.sp,popup=paste('Station ID = ',station.sp$Station.ID)) %>%
+      addCircles(data=min.mine,color='black',weight=7,
+                 popup=paste(min.mine$CFS_DATE, min.mine$PH),group='Mine Outlets') %>%
       addProviderTiles('Esri.WorldTopoMap',group='Topo') %>%
       addProviderTiles('Esri.WorldImagery',group='Imagery') %>%
       addLayersControl(baseGroups=c('Topo','Imagery'),
-                       overlayGroups='Catchments') 
+                       overlayGroups=c('Catchments','Mine Outlets')
+                       ) %>% hideGroup("Mine Outlets")
       
     })
   
@@ -55,13 +63,59 @@ shinyServer(function(input, output) {
   
   output$time.chem <- renderDygraph({
     d1 <- q.chem %>% 
-      filter(variable == input$analyte) %>%
-      dcast(.,dateTime~Site,value.var='value',mean)
-   xts(d1[,-1],order.by=d1$dateTime) %>%
+      filter(variable == input$analyte) %>% 
+      dcast(.,dateTime~Site,value.var='value',mean) 
+   chem.dy <- xts(d1[,-1],order.by=d1$dateTime) %>%
      dygraph(.,group='dy')   %>%
      dyOptions(colors=c('red','blue'),strokeWidth=0, drawPoints=T,pointSize=4) %>%
-     dyAxis('y',label='[Analyte Conc] (mg/l)')
+     dyAxis('y',label='[Analyte] (mg/L)')
+   if(!is.na(input$thresh)){
+     chem.dy <- chem.dy %>% 
+       dyLimit(limit=input$thresh,strokePattern='solid',color='green')
+   }
+   chem.dy
+   
+   
     
+  })
+  
+  output$diff <- renderPlot({    dts <- numeric()
+  if(is.null(input$q_date_window)){
+    dts <- c(min(q.chem$dateTime),max(q.chem$dateTime))
+  }else{
+    dts[1] <- (as.Date(input$q_date_window[[1]]))
+    dts[2] <- (as.Date(input$q_date_window[[2]]))
+  }
+    q.diff <- q.chem %>%
+      filter(!is.na(value)) %>%
+      filter(variable==input$analyte) %>%
+      filter(dateTime > dts[1] & dateTime < dts[2])
+    
+    box <- ggplot(q.diff,aes(x=Site,y=value,group=Site,fill=Site)) + 
+      geom_boxplot(show.legend=F) +
+      ylab('[Analyte] (mg/L)') +
+      scale_fill_manual(name='',values=c('red','blue')) 
+    
+    if(!is.na(input$thresh)){
+      box <- box + geom_hline(yintercept=input$thresh,col='green3',size=1.6)
+    }
+    
+    dens <- ggplot(q.diff,aes(value,fill=Site)) + 
+      geom_density(alpha=.7,show.legend = F) + 
+      ylab('Density') +
+      xlab('[Analyte] (mg/L)') + 
+      scale_fill_manual(name='',values=c('red','blue'))
+    
+    if(!is.na(input$thresh)){
+      dens <- dens + geom_vline(xintercept=input$thresh,col='green3',size=1.6)
+    }
+    
+    
+    grid.newpage()
+    pushViewport(viewport(layout=grid.layout(1,2,widths=c(0.5,0.5))))
+    print(box, vp=viewport(layout.pos.row=1,layout.pos.col=1))
+    print(dens, vp=viewport(layout.pos.row=1,layout.pos.col=2))
+      
   })
   
   output$chemostasis <- renderPlot({
@@ -83,57 +137,57 @@ shinyServer(function(input, output) {
       q.sub <- q.sub
     }
     if(input$season=='summer'){
-      q.sub <- q.sub %>% filter(month %in% c(6,7,8,9))
+      q.sub <- q.sub %>% filter(month %in% c(5,6,7,8,9,10))
     }
     
     if(input$season=='winter'){
-      q.sub <- q.sub %>% filter(!month %in% c(6,7,8,9))
+      q.sub <- q.sub %>% filter(!month %in% c(5,6,7,8,9,10))
     }
     
       gplot <- ggplot(q.sub, aes(x=m3s,y=value,color=Site)) + 
       geom_point(shape=1,size=2) +
       geom_point(shape=1,size=2.1) + 
       scale_color_manual(name='',values=c('red','blue')) + 
-      theme(legend.position=c(.8,.6)) + 
+      theme(legend.position=c(.8,.85)) + 
       xlab('Q (cms)') + 
-      ylab('Analyte Concentration [mg/l]')
+      ylab('Analyte Concentration [mg/L]')
     if(input$model=='none'){
       print(gplot)
     }
     if(input$model=='yx'){
-      mod <- lm(value ~ m3s+Site,data=q.sub) %>% glance(.)
+      mod <- lm(value ~ m3s*Site,data=q.sub) %>% glance(.)
       
       print(gplot + stat_smooth(method='lm') + 
               annotate("text",  x=Inf, y = Inf,
                            label =paste('p = ',round(mod$p.value,3),'R2 =',round(mod$adj.r.squared,2)), 
-                           vjust=2, hjust=2.5,size=6))
+                           vjust=1.5, hjust=2.8,size=6))
     }
     if(input$model=='logx'){
-      mod <- lm(value ~ log10(m3s)+Site,data=q.sub) %>% glance(.)
+      mod <- lm(value ~ log10(m3s)*Site,data=q.sub) %>% glance(.)
       
         print(gplot + scale_x_log10() + 
                 annotate("text",  x=Inf, y = Inf,
                          label =paste('p = ',round(mod$p.value,3),'R2 =',round(mod$adj.r.squared,2)), 
-                         vjust=2, hjust=2.5,size=6) + 
+                         vjust=1.5, hjust=2.8,size=6) + 
         stat_smooth(method='lm'))
     }
     if(input$model=='logy'){
-      mod <- lm(log10(value) ~ m3s+Site,data=q.sub) %>% glance(.)
+      mod <- lm(log10(value) ~ m3s*Site,data=q.sub) %>% glance(.)
       
       print(gplot +  scale_y_log10() + 
               annotate("text",  x=Inf, y = Inf,
                        label =paste('p = ',round(mod$p.value,3),'R2 =',round(mod$adj.r.squared,2)), 
-                       vjust=2, hjust=2.5,size=6) + 
-        stat_smooth(method='lm'))
+                       vjust=1.5, hjust=2.8,size=6) + 
+              stat_smooth(method='lm'))
     }
     if(input$model=='logyx'){
-      mod <- lm(log10(value) ~ log10(m3s)+Site,data=q.sub) %>% glance(.) 
+      mod <- lm(log10(value) ~ log10(m3s)*Site,data=q.sub) %>% glance(.) 
       print(gplot + scale_y_log10() + 
         scale_x_log10() +
         annotate("text",  x=Inf, y = Inf,
                    label = paste('p = ',round(mod$p.value,3),'R2 =',round(mod$adj.r.squared,2)), 
-                   vjust=2, hjust=2.5,size=6) + 
-        stat_smooth(method='lm'))
+                 vjust=1.5, hjust=2.8,size=6) + 
+          stat_smooth(method='lm'))
     }
   })
 })
