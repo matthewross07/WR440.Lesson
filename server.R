@@ -7,6 +7,7 @@
 #    http://shiny.rstudio.com/
 #
 
+#Load libraries
 library(shiny)
 library(tidyverse)
 library(xts)
@@ -18,10 +19,12 @@ library(lubridate)
 library(gridExtra)
 library(grid)
 
+#Load cleaned dataset, see "WQ.Storet.Data.Prep.Rmd" for details on where data comes from
+#and how it was cleaned. 
 load('data/ShinyFullDataset.RData')
 
 
-
+#Set a ggplot theme for aesthetic purposes
 matt_theme <- theme_set(theme_bw())
 matt_theme<- theme_update(axis.line = element_line(colour = "black"),
                           panel.grid.major=element_blank(),
@@ -32,9 +35,10 @@ matt_theme<- theme_update(axis.line = element_line(colour = "black"),
 )
 
 
-# Define server logic required to draw a histogram
+# Define server logic to run application
 shinyServer(function(input, output) {
   
+#Generate leaflet (interactive map)
   output$map <- renderLeaflet({
     leaflet() %>%
       addPolygons(data=csub,color=csub$color,popup=paste((csub$HU_12_NAME)),group='Catchments') %>%
@@ -49,18 +53,21 @@ shinyServer(function(input, output) {
       
     })
   
+#Generate interactive and zoomable discharge plot for first tab of app
   output$q <- renderDygraph({
     dygraph(q.xts,group='dy') %>%
       dyOptions(colors=c('red','blue'),strokeWidth=1.5) %>%
       dyAxis('y',label='Q (cms)')
   })
   
+#Generate interactive and zoomable discharge plot for second tab of app
   output$q2 <- renderDygraph({
     dygraph(q.xts,group='dy') %>%
       dyOptions(colors=c('red','blue'),strokeWidth=1.5) %>%
       dyAxis('y',label='Q (cms)')
   })
   
+#Generate the plot with analyte concentration data. 
   output$time.chem <- renderDygraph({
     d1 <- q.chem %>% 
       filter(variable == input$analyte) %>% 
@@ -74,11 +81,11 @@ shinyServer(function(input, output) {
        dyLimit(limit=input$thresh,strokePattern='solid',color='green')
    }
    chem.dy
-   
-   
-    
   })
   
+  
+#Generate boxplot and probability density function of data. Dynamic by window set in dygraph group
+  #Add threshold line capacity
   output$diff <- renderPlot({    dts <- numeric()
   if(is.null(input$q_date_window)){
     dts <- c(min(q.chem$dateTime),max(q.chem$dateTime))
@@ -117,7 +124,9 @@ shinyServer(function(input, output) {
     print(dens, vp=viewport(layout.pos.row=1,layout.pos.col=2))
       
   })
-  
+
+#Generate plot of Q versus concentration based on dynamic window from dygraph
+  #Give user a bunch of model options to play with. 
   output$chemostasis <- renderPlot({
     dts <- numeric()
     if(is.null(input$q2_date_window)){

@@ -7,6 +7,7 @@
 #    http://shiny.rstudio.com/
 #
 
+#Load libraries
 library(shiny)
 library(leaflet)
 library(dygraphs)
@@ -32,7 +33,7 @@ vars <-
   ))               
 
 
-# Define UI for application that draws a histogram
+# Define User Interface
 shinyUI(fluidPage(sidebarLayout(
   sidebarPanel(
     p('In this teaching module, you will explore changing water quality in the 
@@ -43,7 +44,7 @@ shinyUI(fluidPage(sidebarLayout(
       Code, a lesson summary, and data for this web application can be found at my',
       a('Github site',href='https://github.com/matthewross07/WR440.Lesson')
     ),
-    leafletOutput('map',height=350)
+    leafletOutput('map',height=350) #Sets dimensions of leaflet map
   ),
     mainPanel(
       tabsetPanel(
